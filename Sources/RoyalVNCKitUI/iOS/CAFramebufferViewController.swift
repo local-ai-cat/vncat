@@ -224,6 +224,14 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	private var framebufferImageView: UIImageView!
 	private var framebufferBottomConstraint: NSLayoutConstraint?
 
+	// MARK: - Picture in Picture source layer
+	/// A dedicated, non-interactive host view (sibling above the image view) whose
+	/// layer parents the PiP `AVSampleBufferDisplayLayer`. Using a dedicated view —
+	/// NOT the UIImageView's UIKit-managed layer — keeps the visible inline source
+	/// valid for PiP. It shows the same VNC frames, so there's no visible dup.
+	private var pictureInPictureDisplayHostView: UIView!
+	private weak var pictureInPictureDisplayLayer: CALayer?
+
 	// MARK: - Loading Overlay
 	private var loadingOverlayView: UIView?
 	private var loadingSpinner: UIActivityIndicatorView?
@@ -269,6 +277,48 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	private func invalidateScaleRatioCache() {
 		lastContainerBounds = .zero
 		lastCachedFramebufferSize = .zero
+	}
+
+	/// Host the PiP display layer VISIBLE inside the framebuffer image view (so it
+	/// inherits the same zoom/pan transforms and iOS sees inline playing content).
+	public func hostPictureInPictureDisplayLayer(_ layer: CALayer) {
+		loadViewIfNeeded()
+		pictureInPictureDisplayLayer = layer
+		let hostLayer = pictureInPictureDisplayHostView.layer
+		if layer.superlayer !== hostLayer {
+			layer.removeFromSuperlayer()
+			hostLayer.addSublayer(layer)
+		}
+		// The sample-buffer layer is now the SINGLE visible render (fed by the PiP
+		// capture loop). Hide RoyalVNCKit's image view so the screen isn't drawn
+		// twice (the earlier "two overlapping screens"). The image view keeps
+		// receiving frames while hidden, so unhosting restores it instantly.
+		framebufferImageView.isHidden = true
+		pictureInPictureDisplayHostView.isHidden = false
+		layoutPictureInPictureDisplayLayer()
+	}
+
+	/// Stop using the sample-buffer layer as the visible render: show RoyalVNCKit's
+	/// image view again and pull the PiP layer out. Called on PiP teardown.
+	public func unhostPictureInPictureDisplayLayer() {
+		framebufferImageView.isHidden = false
+		pictureInPictureDisplayLayer?.removeFromSuperlayer()
+		pictureInPictureDisplayLayer = nil
+	}
+
+	/// Match the PiP layer to the host view's bounds, visible and opaque, with
+	/// implicit animations disabled (so the frame set doesn't "fly in"). MUST NOT
+	/// force layout (`view.layoutIfNeeded()`) — this is called from
+	/// `viewDidLayoutSubviews`, so forcing layout here re-enters and crashes.
+	public func layoutPictureInPictureDisplayLayer() {
+		guard let layer = pictureInPictureDisplayLayer,
+			  pictureInPictureDisplayHostView != nil else { return }
+		CATransaction.begin()
+		CATransaction.setDisableActions(true)
+		layer.frame = pictureInPictureDisplayHostView.bounds
+		layer.isHidden = false
+		layer.opacity = 1
+		CATransaction.commit()
 	}
 
 	public var contentRect: CGRect {
@@ -324,6 +374,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		invalidateScaleRatioCache()
 		clampPanOffset()
 		updateTransform()
+		layoutPictureInPictureDisplayLayer()
 		if isDebugInfoEnabled {
 			relayoutHUDPreservingEdge()
 		}
@@ -382,9 +433,16 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		layer.minificationFilter = .linear
 		layer.magnificationFilter = .linear
 
+		pictureInPictureDisplayHostView = UIView()
+		pictureInPictureDisplayHostView.translatesAutoresizingMaskIntoConstraints = false
+		pictureInPictureDisplayHostView.backgroundColor = .clear
+		pictureInPictureDisplayHostView.isUserInteractionEnabled = false
+		pictureInPictureDisplayHostView.clipsToBounds = true
+
 		view.addSubview(framebufferView)
 		framebufferView.addSubview(framebufferContentView)
 		framebufferContentView.addSubview(framebufferImageView)
+		framebufferContentView.addSubview(pictureInPictureDisplayHostView)
 
 		// Top, leading, trailing constraints - bottom is set in setupToolbar
 		NSLayoutConstraint.activate([
@@ -398,7 +456,11 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 			framebufferImageView.topAnchor.constraint(equalTo: framebufferContentView.topAnchor),
 			framebufferImageView.leadingAnchor.constraint(equalTo: framebufferContentView.leadingAnchor),
 			framebufferImageView.trailingAnchor.constraint(equalTo: framebufferContentView.trailingAnchor),
-			framebufferImageView.bottomAnchor.constraint(equalTo: framebufferContentView.bottomAnchor)
+			framebufferImageView.bottomAnchor.constraint(equalTo: framebufferContentView.bottomAnchor),
+			pictureInPictureDisplayHostView.topAnchor.constraint(equalTo: framebufferContentView.topAnchor),
+			pictureInPictureDisplayHostView.leadingAnchor.constraint(equalTo: framebufferContentView.leadingAnchor),
+			pictureInPictureDisplayHostView.trailingAnchor.constraint(equalTo: framebufferContentView.trailingAnchor),
+			pictureInPictureDisplayHostView.bottomAnchor.constraint(equalTo: framebufferContentView.bottomAnchor)
 		])
 	}
 
