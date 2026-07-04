@@ -229,8 +229,36 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	/// layer parents the PiP `AVSampleBufferDisplayLayer`. Using a dedicated view —
 	/// NOT the UIImageView's UIKit-managed layer — keeps the visible inline source
 	/// valid for PiP. It shows the same VNC frames, so there's no visible dup.
-	private var pictureInPictureDisplayHostView: UIView!
+	private var pictureInPictureDisplayHostView: PiPLayerHostView!
 	private weak var pictureInPictureDisplayLayer: CALayer?
+
+	/// Hosts the PiP `AVSampleBufferDisplayLayer` and keeps it sized to its own
+	/// bounds via `layoutSubviews`, so the sole-render layer re-fits on EVERY bounds
+	/// change (keyboard show/hide, rotation, resize) — constraint-driven, exactly
+	/// like the UIImageView it replaces.
+	final class PiPLayerHostView: UIView {
+		weak var hostedLayer: CALayer? {
+			didSet {
+				if oldValue !== hostedLayer { oldValue?.removeFromSuperlayer() }
+				if let hostedLayer, hostedLayer.superlayer !== layer {
+					hostedLayer.removeFromSuperlayer()
+					layer.addSublayer(hostedLayer)
+				}
+				setNeedsLayout()
+			}
+		}
+
+		override func layoutSubviews() {
+			super.layoutSubviews()
+			guard let hostedLayer else { return }
+			CATransaction.begin()
+			CATransaction.setDisableActions(true)
+			hostedLayer.frame = bounds
+			hostedLayer.isHidden = false
+			hostedLayer.opacity = 1
+			CATransaction.commit()
+		}
+	}
 
 	// MARK: - Loading Overlay
 	private var loadingOverlayView: UIView?
@@ -284,11 +312,11 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	public func hostPictureInPictureDisplayLayer(_ layer: CALayer) {
 		loadViewIfNeeded()
 		pictureInPictureDisplayLayer = layer
-		let hostLayer = pictureInPictureDisplayHostView.layer
-		if layer.superlayer !== hostLayer {
-			layer.removeFromSuperlayer()
-			hostLayer.addSublayer(layer)
-		}
+		// The host view keeps this layer sized to its own bounds in layoutSubviews,
+		// so the render re-fits on EVERY bounds change (keyboard show/hide, rotation,
+		// resize) — a manual frame-set from viewDidLayoutSubviews missed the final
+		// keyboard-animation bounds and left the screen shrunk.
+		pictureInPictureDisplayHostView.hostedLayer = layer
 		// The sample-buffer layer is now the SINGLE visible render (fed by the PiP
 		// capture loop). Hide RoyalVNCKit's image view so the screen isn't drawn
 		// twice (the earlier "two overlapping screens"). The image view keeps
@@ -302,23 +330,16 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	/// image view again and pull the PiP layer out. Called on PiP teardown.
 	public func unhostPictureInPictureDisplayLayer() {
 		framebufferImageView.isHidden = false
+		pictureInPictureDisplayHostView?.hostedLayer = nil
 		pictureInPictureDisplayLayer?.removeFromSuperlayer()
 		pictureInPictureDisplayLayer = nil
 	}
 
-	/// Match the PiP layer to the host view's bounds, visible and opaque, with
-	/// implicit animations disabled (so the frame set doesn't "fly in"). MUST NOT
-	/// force layout (`view.layoutIfNeeded()`) — this is called from
-	/// `viewDidLayoutSubviews`, so forcing layout here re-enters and crashes.
+	/// Nudge the host view to re-lay-out its hosted layer now (it also does this
+	/// automatically in layoutSubviews on any bounds change).
 	public func layoutPictureInPictureDisplayLayer() {
-		guard let layer = pictureInPictureDisplayLayer,
-			  pictureInPictureDisplayHostView != nil else { return }
-		CATransaction.begin()
-		CATransaction.setDisableActions(true)
-		layer.frame = pictureInPictureDisplayHostView.bounds
-		layer.isHidden = false
-		layer.opacity = 1
-		CATransaction.commit()
+		pictureInPictureDisplayHostView?.setNeedsLayout()
+		pictureInPictureDisplayHostView?.layoutIfNeeded()
 	}
 
 	public var contentRect: CGRect {
@@ -433,7 +454,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		layer.minificationFilter = .linear
 		layer.magnificationFilter = .linear
 
-		pictureInPictureDisplayHostView = UIView()
+		pictureInPictureDisplayHostView = PiPLayerHostView()
 		pictureInPictureDisplayHostView.translatesAutoresizingMaskIntoConstraints = false
 		pictureInPictureDisplayHostView.backgroundColor = .clear
 		pictureInPictureDisplayHostView.isUserInteractionEnabled = false
