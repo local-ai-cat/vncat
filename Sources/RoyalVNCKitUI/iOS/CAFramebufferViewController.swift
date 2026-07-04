@@ -1786,17 +1786,29 @@ extension CAFramebufferViewController: DisplayLinkDelegate {
 extension CAFramebufferViewController {
 	func frameSizeDidChange(_ size: CGSize) {
 		DispatchQueue.main.async { [weak self] in
-			guard let self = self else { return }
-			self.framebufferSize = size
-			self.invalidateScaleRatioCache()
-			self.clampPanOffset()
-
-			// Center cursor if it's at origin (initial state)
-			if self.cursorPosition == .zero {
-				self.cursorPosition = CGPoint(x: size.width / 2, y: size.height / 2)
-			}
-			self.updateCursorPosition()
+			self?.applyFramebufferSizeChange(size)
 		}
+	}
+
+	/// Apply a framebuffer RESOLUTION change (e.g. desktop ⇄ macOS login screen, or
+	/// connecting to an already-locked Mac at a different resolution). Resets stale
+	/// zoom/pan (a desktop-size pan would clip a differently-sized login screen),
+	/// re-runs the transform, AND re-lays-out the PiP sample-buffer layer — which is
+	/// now the sole visible render, so it must track the new geometry or the screen
+	/// clips. Must run on the main thread.
+	func applyFramebufferSizeChange(_ size: CGSize) {
+		guard size != .zero, framebufferSize != size else { return }
+		framebufferSize = size
+		invalidateScaleRatioCache()
+		currentScale = 1
+		panOffset = .zero
+		clampPanOffset()
+		updateTransform()
+		layoutPictureInPictureDisplayLayer()
+		if cursorPosition == .zero {
+			cursorPosition = CGPoint(x: size.width / 2, y: size.height / 2)
+		}
+		updateCursorPosition()
 	}
 
 	// swiftlint:disable identifier_name - x,y match VNCConnectionDelegate API
@@ -1818,9 +1830,7 @@ extension CAFramebufferViewController {
 				guard let self = self else { return }
 
 				if sizeChanged {
-					self.framebufferSize = newSize
-					self.invalidateScaleRatioCache()
-					self.clampPanOffset()
+					self.applyFramebufferSizeChange(newSize)
 				}
 
 				self.recordDebugInfoUpdate(width: width,
@@ -1845,9 +1855,7 @@ extension CAFramebufferViewController {
 			CATransaction.setDisableActions(true)
 
 			if sizeChanged {
-				self.framebufferSize = newSize
-				self.invalidateScaleRatioCache()
-				self.clampPanOffset()
+				self.applyFramebufferSizeChange(newSize)
 			}
 
 			CATransaction.commit()
