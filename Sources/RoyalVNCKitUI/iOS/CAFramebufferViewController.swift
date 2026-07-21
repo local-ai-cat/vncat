@@ -1260,6 +1260,14 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		}
 	}
 
+	/// Send an explicit user-requested paste chord while preserving toolbar and
+	/// hardware modifiers that were already held.
+	public func sendPasteChord() {
+		guard let key = VNCKeyCode.withCharacter("v").first else { return }
+		sendChord(modifiers: [.command], key: key)
+		mediumHaptic.impactOccurred()
+	}
+
 	private func isModifierHeld(_ keyCode: VNCKeyCode) -> Bool {
 		switch keyCode {
 		case .shift:
