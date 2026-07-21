@@ -124,6 +124,25 @@ private struct RollingDurationBuffer {
 	}
 }
 
+private final class ConnectionStatsLabel: UILabel {
+	private let contentInsets = UIEdgeInsets(top: 7, left: 9, bottom: 7, right: 9)
+
+	override func drawText(in rect: CGRect) {
+		super.drawText(in: rect.inset(by: contentInsets))
+	}
+
+	override func textRect(forBounds bounds: CGRect, limitedToNumberOfLines numberOfLines: Int) -> CGRect {
+		let insetBounds = bounds.inset(by: contentInsets)
+		let textRect = super.textRect(forBounds: insetBounds, limitedToNumberOfLines: numberOfLines)
+		return CGRect(
+			x: textRect.minX - contentInsets.left,
+			y: textRect.minY - contentInsets.top,
+			width: textRect.width + contentInsets.left + contentInsets.right,
+			height: textRect.height + contentInsets.top + contentInsets.bottom
+		)
+	}
+}
+
 // swiftlint:disable:next type_body_length
 public class CAFramebufferViewController: UIViewController, FramebufferViewController {
 	public weak var framebufferViewControllerDelegate: FramebufferViewControllerDelegate?
@@ -138,6 +157,21 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 			#if DEBUG
 			updateDebugInfoVisibility()
 			#endif
+		}
+	}
+	public var isConnectionStatsVisible = false {
+		didSet {
+			updateConnectionStatsOverlay()
+		}
+	}
+	public var connectionStats = VNCConnectionStatsSnapshot() {
+		didSet {
+			updateConnectionStatsOverlay()
+		}
+	}
+	public var connectionStatsTopInset: CGFloat = 52 {
+		didSet {
+			connectionStatsTopConstraint?.constant = connectionStatsTopInset
 		}
 	}
 
@@ -173,6 +207,8 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	private var displayLink: DisplayLink?
 	private var needsRender = false
 	private var pendingFramebuffer: VNCFramebuffer?
+	private var connectionStatsLabel: UILabel?
+	private var connectionStatsTopConstraint: NSLayoutConstraint?
 
 	// MARK: - Debug Info
 	private var debugInfoLabel: UILabel?
@@ -388,6 +424,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 			setupDebugInfoOverlay()
 			#endif
 			setupLoadingOverlay()
+			setupConnectionStatsOverlay()
 			setupHiddenTextField()
 			setupGestures()
 
@@ -665,7 +702,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		])
 	}
 
-		private func setupLoadingOverlay() {
+	private func setupLoadingOverlay() {
 			let overlay = UIView()
 			overlay.translatesAutoresizingMaskIntoConstraints = false
 			overlay.backgroundColor = UIColor.black.withAlphaComponent(0.6)
@@ -935,6 +972,41 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		button.accessibilityTraits = .button
 
 		return button
+	}
+
+	private func setupConnectionStatsOverlay() {
+		let label = ConnectionStatsLabel()
+		label.translatesAutoresizingMaskIntoConstraints = false
+		label.numberOfLines = 0
+		label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+		label.textColor = .white
+		label.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+		label.layer.cornerRadius = 9
+		label.layer.masksToBounds = true
+		label.isUserInteractionEnabled = false
+		label.accessibilityIdentifier = "vnc.connection-stats"
+		label.accessibilityLabel = "VNC connection statistics"
+		view.addSubview(label)
+
+		let topConstraint = label.topAnchor.constraint(
+			equalTo: view.safeAreaLayoutGuide.topAnchor,
+			constant: connectionStatsTopInset
+		)
+		connectionStatsTopConstraint = topConstraint
+		connectionStatsLabel = label
+		NSLayoutConstraint.activate([
+			topConstraint,
+			label.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+			label.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12)
+		])
+		updateConnectionStatsOverlay()
+	}
+
+	private func updateConnectionStatsOverlay() {
+		guard isViewLoaded, let connectionStatsLabel else { return }
+		connectionStatsLabel.text = connectionStats.displayText
+		connectionStatsLabel.accessibilityValue = connectionStats.displayText
+		connectionStatsLabel.isHidden = !isConnectionStatsVisible
 	}
 
 	private func setupHiddenTextField() {
