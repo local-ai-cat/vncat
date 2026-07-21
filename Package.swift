@@ -32,6 +32,11 @@ let package = Package(
                 .product(name: "RoyalVNCKit", package: "royalvnc")
             ],
             path: "Sources/RoyalVNCKitUI"
+        ),
+        .testTarget(
+            name: "RoyalVNCKitUITests",
+            dependencies: ["RoyalVNCKitUI"],
+            path: "Tests/RoyalVNCKitUITests"
         )
     ]
 )

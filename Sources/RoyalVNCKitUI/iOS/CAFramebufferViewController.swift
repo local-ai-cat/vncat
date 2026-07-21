@@ -148,9 +148,19 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	// MARK: - Input Views
 	private var hiddenTextField: RemoteKeyboardTextField!
 	private var toolbarView: UIView!
+	private var toolbarStackView: UIStackView!
+	private var shiftButton: UIButton!
+	private var controlButton: UIButton!
+	private var optionButton: UIButton!
+	private var commandButton: UIButton!
 	private var isKeyboardVisible = false
 	private var toolbarBottomConstraint: NSLayoutConstraint?
 	private var activeHardwareModifiers = [VNCKeyCode]()
+	private weak var desktopSwipeGesture: UIPanGestureRecognizer?
+	private var desktopSwipeTouchCount = 0
+	private var desktopSwipeHadCompetingOutput = false
+	private var lastCompetingGestureOutputAt: TimeInterval?
+	private var twoFingerPanDidBegin = false
 
 	// MARK: - Modifier Key State
 	private var isShiftPressed = false
@@ -559,12 +569,16 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		}
 		NSLayoutConstraint.activate(constraints)
 
-		// Create toolbar buttons
-		let stackView = UIStackView()
-		stackView.axis = .horizontal
-		stackView.distribution = .fillEqually
-		stackView.spacing = 4
-		stackView.translatesAutoresizingMaskIntoConstraints = false
+		let scrollView = UIScrollView()
+		scrollView.translatesAutoresizingMaskIntoConstraints = false
+		scrollView.alwaysBounceHorizontal = true
+		scrollView.showsHorizontalScrollIndicator = false
+
+		toolbarStackView = UIStackView()
+		toolbarStackView.axis = .horizontal
+		toolbarStackView.distribution = .fillEqually
+		toolbarStackView.spacing = 4
+		toolbarStackView.translatesAutoresizingMaskIntoConstraints = false
 
 		// Cursor toggle
 		let cursorBtn = createToolbarButton(action: #selector(toggleCursor(_:)), icon: "cursorarrow", tag: 10, accessibilityLabel: "Toggle cursor visibility")
@@ -586,9 +600,26 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 		// Modifiers
 		let shiftBtn = createToolbarButton(action: #selector(toggleShift), icon: "shift", tag: 1, accessibilityLabel: "Shift modifier")
-		let ctrlBtn = createToolbarButton(action: #selector(toggleControl), title: "ctrl", tag: 2, accessibilityLabel: "Control modifier")
-		let optBtn = createToolbarButton(action: #selector(toggleOption), icon: "option", tag: 3, accessibilityLabel: "Option modifier")
-		let cmdBtn = createToolbarButton(action: #selector(toggleCommand), icon: "command", tag: 4, accessibilityLabel: "Command modifier")
+		let controlBtn = createToolbarButton(action: #selector(toggleControl), title: "ctrl", tag: 2, accessibilityLabel: "Control modifier")
+		let optionBtn = createToolbarButton(action: #selector(toggleOption), icon: "option", tag: 3, accessibilityLabel: "Option modifier")
+		let commandBtn = createToolbarButton(action: #selector(toggleCommand), icon: "command", tag: 4, accessibilityLabel: "Command modifier")
+		shiftButton = shiftBtn
+		controlButton = controlBtn
+		optionButton = optionBtn
+		commandButton = commandBtn
+
+		let missionControlButton = createToolbarButton(
+			action: #selector(showMissionControl),
+			icon: "macwindow.on.rectangle",
+			accessibilityLabel: "Mission Control"
+		)
+		missionControlButton.accessibilityIdentifier = "vnc.mission-control"
+		let appExposeButton = createToolbarButton(
+			action: #selector(showAppExpose),
+			icon: "square.grid.2x2",
+			accessibilityLabel: "App Exposé"
+		)
+		appExposeButton.accessibilityIdentifier = "vnc.app-expose"
 
 		// Paste from clipboard
 		let pasteBtn = createToolbarButton(action: #selector(pasteFromClipboard), icon: "doc.on.clipboard", accessibilityLabel: "Paste from clipboard")
@@ -597,30 +628,31 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		let disconnectBtn = createToolbarButton(action: #selector(disconnect), icon: "xmark.circle", accessibilityLabel: "Disconnect")
 		disconnectBtn.tintColor = .systemRed
 
-		stackView.addArrangedSubview(cursorBtn)
-		stackView.addArrangedSubview(keyboardBtn)
-		stackView.addArrangedSubview(pasteBtn)
-		stackView.addArrangedSubview(escBtn)
-		stackView.addArrangedSubview(tabBtn)
-		stackView.addArrangedSubview(leftBtn)
-		stackView.addArrangedSubview(upBtn)
-		stackView.addArrangedSubview(downBtn)
-		stackView.addArrangedSubview(rightBtn)
-		stackView.addArrangedSubview(shiftBtn)
-		stackView.addArrangedSubview(ctrlBtn)
-		stackView.addArrangedSubview(optBtn)
-		stackView.addArrangedSubview(cmdBtn)
-		stackView.addArrangedSubview(disconnectBtn)
-
-		toolbarView.addSubview(stackView)
-
-			NSLayoutConstraint.activate([
-				stackView.topAnchor.constraint(equalTo: toolbarView.topAnchor, constant: 4),
-				stackView.leadingAnchor.constraint(equalTo: toolbarView.leadingAnchor, constant: 8),
-				stackView.trailingAnchor.constraint(equalTo: toolbarView.trailingAnchor, constant: -8),
-				stackView.bottomAnchor.constraint(equalTo: toolbarView.bottomAnchor, constant: -4)
-			])
+		let buttons = [
+			cursorBtn, keyboardBtn, pasteBtn, missionControlButton, appExposeButton,
+			escBtn, tabBtn, leftBtn, upBtn, downBtn, rightBtn,
+			shiftBtn, controlBtn, optionBtn, commandBtn, disconnectBtn
+		]
+		for button in buttons {
+			button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+			toolbarStackView.addArrangedSubview(button)
 		}
+
+		toolbarView.addSubview(scrollView)
+		scrollView.addSubview(toolbarStackView)
+
+		NSLayoutConstraint.activate([
+			scrollView.topAnchor.constraint(equalTo: toolbarView.topAnchor, constant: 4),
+			scrollView.leadingAnchor.constraint(equalTo: toolbarView.leadingAnchor, constant: 8),
+			scrollView.trailingAnchor.constraint(equalTo: toolbarView.trailingAnchor, constant: -8),
+			scrollView.bottomAnchor.constraint(equalTo: toolbarView.bottomAnchor, constant: -4),
+			toolbarStackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+			toolbarStackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+			toolbarStackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+			toolbarStackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+			toolbarStackView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
+		])
+	}
 
 		private func setupLoadingOverlay() {
 			let overlay = UIView()
@@ -961,6 +993,13 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		let pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
 		framebufferView.addGestureRecognizer(pinchGesture)
 
+		let desktopSwipe = UIPanGestureRecognizer(target: self, action: #selector(handleDesktopSwipe(_:)))
+		desktopSwipe.minimumNumberOfTouches = 3
+		desktopSwipe.maximumNumberOfTouches = 4
+		desktopSwipe.delegate = self
+		framebufferView.addGestureRecognizer(desktopSwipe)
+		desktopSwipeGesture = desktopSwipe
+
 		// Long press = drag
 		let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
 		longPress.minimumPressDuration = 0.3
@@ -1001,6 +1040,14 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 	@objc private func sendArrowRight() {
 		sendKey(.rightArrow)
+	}
+
+	@objc private func showMissionControl() {
+		sendChord(modifiers: [.control], key: .upArrow)
+	}
+
+	@objc private func showAppExpose() {
+		sendChord(modifiers: [.control], key: .downArrow)
 	}
 
 	@objc private func toggleShift(_ sender: UIButton) {
@@ -1045,6 +1092,14 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		}
 	}
 
+	private var modifierButtons: [UIButton] {
+		[shiftButton, controlButton, optionButton, commandButton].compactMap { $0 }
+	}
+
+	private var oneShotModifierButtons: [UIButton] {
+		[controlButton, optionButton, commandButton].compactMap { $0 }
+	}
+
 	/// Release all held modifiers (call when disconnecting or view disappears)
 	private func releaseAllModifiers() {
 		if isShiftPressed {
@@ -1064,11 +1119,8 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 			isCommandPressed = false
 		}
 
-		// Update UI
-		if let stackView = toolbarView?.subviews.first(where: { $0 is UIStackView }) as? UIStackView {
-			for case let button as UIButton in stackView.arrangedSubviews where button.tag > 0 {
-				updateModifierButtonAppearance(button, isPressed: false)
-			}
+		for button in modifierButtons {
+			updateModifierButtonAppearance(button, isPressed: false)
 		}
 	}
 
@@ -1111,6 +1163,35 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		releaseOneShotModifiers()
 	}
 
+	private func sendChord(modifiers: [VNCKeyCode], key: VNCKeyCode) {
+		let modifiersToPress = modifiers.filter { !isModifierHeld($0) }
+		for modifier in modifiersToPress {
+			framebufferViewControllerDelegate?.framebufferViewController(self, keyDown: modifier)
+		}
+
+		framebufferViewControllerDelegate?.framebufferViewController(self, keyDown: key)
+		framebufferViewControllerDelegate?.framebufferViewController(self, keyUp: key)
+
+		for modifier in modifiersToPress.reversed() {
+			framebufferViewControllerDelegate?.framebufferViewController(self, keyUp: modifier)
+		}
+	}
+
+	private func isModifierHeld(_ keyCode: VNCKeyCode) -> Bool {
+		switch keyCode {
+		case .shift:
+			return isShiftPressed || activeHardwareModifiers.contains(keyCode)
+		case .control:
+			return isControlPressed || activeHardwareModifiers.contains(keyCode)
+		case .option:
+			return isOptionPressed || activeHardwareModifiers.contains(keyCode)
+		case .command:
+			return isCommandPressed || activeHardwareModifiers.contains(keyCode)
+		default:
+			return activeHardwareModifiers.contains(keyCode)
+		}
+	}
+
 	/// Release Cmd, Ctrl, and Option if currently held; leave Shift alone.
 	/// Called after any non-modifier action (key press, mouse click) so combos
 	/// like Cmd+C / Cmd+V / Cmd+click feel like a single gesture rather than
@@ -1129,8 +1210,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 			isCommandPressed = false
 		}
 
-		guard let stackView = toolbarView?.subviews.first(where: { $0 is UIStackView }) as? UIStackView else { return }
-		for case let button as UIButton in stackView.arrangedSubviews where (2...4).contains(button.tag) {
+		for button in oneShotModifierButtons {
 			updateModifierButtonAppearance(button, isPressed: false)
 		}
 	}
@@ -1467,8 +1547,14 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 		switch gesture.state {
 			case .began:
+				twoFingerPanDidBegin = true
+				lastCompetingGestureOutputAt = CACurrentMediaTime()
 				beginPointerModifiersIfNeeded()
 			case .changed:
+				guard !isDesktopSwipeInProgress else {
+					return
+				}
+				lastCompetingGestureOutputAt = CACurrentMediaTime()
 				// Calculate velocity-based multiplier for acceleration (faster scrolls = more steps)
 				let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 				let accelerationMultiplier = max(1.0, min(5.0, velocityMagnitude / 500.0))
@@ -1482,7 +1568,10 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 				framebufferViewControllerDelegate?.framebufferViewController(self, scrollDelta: scrollDelta, mousePosition: fbPoint)
 				gesture.setTranslation(.zero, in: framebufferView)
 			case .ended, .cancelled, .failed:
-				endPointerModifiersIfNeeded()
+				if twoFingerPanDidBegin {
+					endPointerModifiersIfNeeded()
+					twoFingerPanDidBegin = false
+				}
 			default:
 				break
 		}
@@ -1490,7 +1579,11 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 	@objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
 		switch gesture.state {
-			case .began, .changed:
+			case .changed:
+				guard !isDesktopSwipeInProgress, gesture.numberOfTouches <= 2 else {
+					return
+				}
+				lastCompetingGestureOutputAt = CACurrentMediaTime()
 				let anchorPoint = gesture.location(in: framebufferView)
 				let anchoredFramebufferPoint = touchPointToFramebuffer(anchorPoint)
 				let newScale = currentScale * gesture.scale
@@ -1509,6 +1602,47 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		default:
 			break
 		}
+	}
+
+	@objc private func handleDesktopSwipe(_ gesture: UIPanGestureRecognizer) {
+		switch gesture.state {
+		case .began:
+			desktopSwipeTouchCount = gesture.numberOfTouches
+			if let lastOutput = lastCompetingGestureOutputAt {
+				desktopSwipeHadCompetingOutput = CACurrentMediaTime() - lastOutput < 0.2
+			}
+		case .changed:
+			desktopSwipeTouchCount = max(desktopSwipeTouchCount, gesture.numberOfTouches)
+		case .ended:
+			let action = DesktopSwipeClassifier.action(
+				translation: gesture.translation(in: framebufferView),
+				velocity: gesture.velocity(in: framebufferView),
+				touchCount: desktopSwipeTouchCount,
+				allTouchesDownBeforeMovement: !desktopSwipeHadCompetingOutput
+			)
+			if action == .missionControl {
+				showMissionControl()
+				mediumHaptic.impactOccurred()
+			} else if action == .appExpose {
+				showAppExpose()
+				mediumHaptic.impactOccurred()
+			}
+			resetDesktopSwipeState()
+		case .cancelled, .failed:
+			resetDesktopSwipeState()
+		default:
+			break
+		}
+	}
+
+	private var isDesktopSwipeInProgress: Bool {
+		guard let state = desktopSwipeGesture?.state else { return false }
+		return state == .began || state == .changed
+	}
+
+	private func resetDesktopSwipeState() {
+		desktopSwipeTouchCount = 0
+		desktopSwipeHadCompetingOutput = false
 	}
 
 	@objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -1916,6 +2050,15 @@ extension CAFramebufferViewController {
 
 			self.updateCursorPosition()
 		}
+	}
+}
+
+extension CAFramebufferViewController: UIGestureRecognizerDelegate {
+	public func gestureRecognizer(
+		_ gestureRecognizer: UIGestureRecognizer,
+		shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+	) -> Bool {
+		gestureRecognizer === desktopSwipeGesture || otherGestureRecognizer === desktopSwipeGesture
 	}
 }
 
