@@ -154,6 +154,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	private var optionButton: UIButton!
 	private var commandButton: UIButton!
 	private var isKeyboardVisible = false
+	private var keyboardObscuresBottom = false
 	private var toolbarBottomConstraint: NSLayoutConstraint?
 	private var activeHardwareModifiers = [VNCKeyCode]()
 	private weak var desktopSwipeGesture: UIPanGestureRecognizer?
@@ -397,7 +398,14 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 		// Listen for keyboard notifications
 		NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow(_:)), name: UIResponder.keyboardWillShowNotification, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+	}
+
+	public override func viewSafeAreaInsetsDidChange() {
+		super.viewSafeAreaInsetsDidChange()
+		guard !keyboardObscuresBottom else { return }
+		toolbarBottomConstraint?.constant = restingToolbarBottomConstant
 	}
 
 	public override func viewDidLayoutSubviews() {
@@ -552,7 +560,10 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 		view.addSubview(toolbarView)
 
-		let bottomConstraint = toolbarView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+		let bottomConstraint = toolbarView.bottomAnchor.constraint(
+			equalTo: view.bottomAnchor,
+			constant: restingToolbarBottomConstant
+		)
 		toolbarBottomConstraint = bottomConstraint
 
 		// Connect framebuffer bottom to toolbar top
@@ -1218,34 +1229,52 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	// MARK: - Keyboard Notifications
 
 	@objc private func keyboardWillShow(_ notification: Notification) {
-		isKeyboardVisible = true
+		updateToolbarForKeyboardFrame(notification)
+	}
 
-		guard let userInfo = notification.userInfo,
-			  let keyboardFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
-			  let duration = userInfo[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else {
+	@objc private func keyboardWillChangeFrame(_ notification: Notification) {
+		updateToolbarForKeyboardFrame(notification)
+	}
+
+	private func updateToolbarForKeyboardFrame(_ notification: Notification) {
+		guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
 			return
 		}
 
-		let keyboardHeight = keyboardFrame.height - view.safeAreaInsets.bottom
-		toolbarBottomConstraint?.constant = -keyboardHeight
+		let convertedFrame = view.convert(keyboardFrame, from: nil)
+		let overlapHeight = KeyboardToolbarGeometry.bottomOverlapHeight(
+			viewBounds: view.bounds,
+			keyboardFrame: convertedFrame
+		)
+		isKeyboardVisible = convertedFrame.intersects(view.bounds)
+		keyboardObscuresBottom = overlapHeight > 0
+		toolbarBottomConstraint?.constant = keyboardObscuresBottom
+			? -overlapHeight
+			: restingToolbarBottomConstant
 
-		UIView.animate(withDuration: duration) {
-			self.view.layoutIfNeeded()
-		}
+		animateToolbarLayout(with: notification)
 	}
 
 	@objc private func keyboardWillHide(_ notification: Notification) {
 		isKeyboardVisible = false
+		keyboardObscuresBottom = false
+		toolbarBottomConstraint?.constant = restingToolbarBottomConstant
+		animateToolbarLayout(with: notification)
+	}
 
-		guard let userInfo = notification.userInfo,
-			  let duration = userInfo[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else {
-			toolbarBottomConstraint?.constant = 0
-			return
-		}
+	private var restingToolbarBottomConstant: CGFloat {
+		-view.safeAreaInsets.bottom
+	}
 
-		toolbarBottomConstraint?.constant = 0
-
-		UIView.animate(withDuration: duration) {
+	private func animateToolbarLayout(with notification: Notification) {
+		let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+		let curve = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue
+			?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
+		let options: UIView.AnimationOptions = [
+			UIView.AnimationOptions(rawValue: curve << 16),
+			.beginFromCurrentState
+		]
+		UIView.animate(withDuration: duration, delay: 0, options: options) {
 			self.view.layoutIfNeeded()
 		}
 	}
