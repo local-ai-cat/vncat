@@ -610,20 +610,32 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 			toolbarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
 			toolbarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 			bottomConstraint,
-			toolbarView.heightAnchor.constraint(equalToConstant: 50)
+			toolbarView.heightAnchor.constraint(equalToConstant: 96)
 		]
 		if let fbBottomConstraint = framebufferBottomConstraint {
 			constraints.insert(fbBottomConstraint, at: 0)
 		}
 		NSLayoutConstraint.activate(constraints)
 
-		let scrollView = UIScrollView()
-		scrollView.translatesAutoresizingMaskIntoConstraints = false
-		scrollView.alwaysBounceHorizontal = true
-		scrollView.showsHorizontalScrollIndicator = false
+		// Two rows. Sixteen 44pt buttons need ~764pt; a phone gives ~374pt, so this
+		// used to be a horizontal UIScrollView and more than half the controls —
+		// every modifier plus disconnect — sat off-screen until you slid the strip.
+		// Two fillEqually rows put every control on screen at a full tap target and
+		// remove the sliding entirely.
+		let commandRow = UIStackView()
+		commandRow.axis = .horizontal
+		commandRow.distribution = .fillEqually
+		commandRow.spacing = 4
+		commandRow.translatesAutoresizingMaskIntoConstraints = false
 
-		toolbarStackView = UIStackView()
-		toolbarStackView.axis = .horizontal
+		let keyRow = UIStackView()
+		keyRow.axis = .horizontal
+		keyRow.distribution = .fillEqually
+		keyRow.spacing = 4
+		keyRow.translatesAutoresizingMaskIntoConstraints = false
+
+		toolbarStackView = UIStackView(arrangedSubviews: [commandRow, keyRow])
+		toolbarStackView.axis = .vertical
 		toolbarStackView.distribution = .fillEqually
 		toolbarStackView.spacing = 4
 		toolbarStackView.translatesAutoresizingMaskIntoConstraints = false
@@ -676,29 +688,29 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		let disconnectBtn = createToolbarButton(action: #selector(disconnect), icon: "xmark.circle", accessibilityLabel: "Disconnect")
 		disconnectBtn.tintColor = .systemRed
 
-		let buttons = [
-			cursorBtn, keyboardBtn, pasteBtn, missionControlButton, appExposeButton,
-			escBtn, tabBtn, leftBtn, upBtn, downBtn, rightBtn,
-			shiftBtn, controlBtn, optionBtn, commandBtn, disconnectBtn
+		// Row 1 = session commands, row 2 = keys and modifiers.
+		let commandButtons = [
+			cursorBtn, keyboardBtn, pasteBtn, missionControlButton,
+			appExposeButton, escBtn, tabBtn, disconnectBtn
 		]
-		for button in buttons {
-			button.widthAnchor.constraint(equalToConstant: 44).isActive = true
-			toolbarStackView.addArrangedSubview(button)
+		let keyButtons = [
+			leftBtn, upBtn, downBtn, rightBtn,
+			shiftBtn, controlBtn, optionBtn, commandBtn
+		]
+		for button in commandButtons {
+			commandRow.addArrangedSubview(button)
+		}
+		for button in keyButtons {
+			keyRow.addArrangedSubview(button)
 		}
 
-		toolbarView.addSubview(scrollView)
-		scrollView.addSubview(toolbarStackView)
+		toolbarView.addSubview(toolbarStackView)
 
 		NSLayoutConstraint.activate([
-			scrollView.topAnchor.constraint(equalTo: toolbarView.topAnchor, constant: 4),
-			scrollView.leadingAnchor.constraint(equalTo: toolbarView.leadingAnchor, constant: 8),
-			scrollView.trailingAnchor.constraint(equalTo: toolbarView.trailingAnchor, constant: -8),
-			scrollView.bottomAnchor.constraint(equalTo: toolbarView.bottomAnchor, constant: -4),
-			toolbarStackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-			toolbarStackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-			toolbarStackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-			toolbarStackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-			toolbarStackView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
+			toolbarStackView.topAnchor.constraint(equalTo: toolbarView.topAnchor, constant: 4),
+			toolbarStackView.leadingAnchor.constraint(equalTo: toolbarView.leadingAnchor, constant: 8),
+			toolbarStackView.trailingAnchor.constraint(equalTo: toolbarView.trailingAnchor, constant: -8),
+			toolbarStackView.bottomAnchor.constraint(equalTo: toolbarView.bottomAnchor, constant: -4)
 		])
 	}
 
