@@ -30,11 +30,14 @@
 //  Double tap           | 1       | Double click         | Two ripples, medium haptic
 //  Two-finger tap       | 2       | Right click          | Orange ripple, medium haptic
 //  One-finger pan       | 1       | Move cursor / pan*   | Cursor follows touch
-//  Two-finger pan       | 2       | Scroll (mouse wheel) | --
+//  Two-finger pan       | 2       | Pan* / scroll wheel  | --
 //  Pinch                | 2       | Zoom in/out          | --
 //  Long press + drag    | 1       | Click-drag           | Blue dot, heavy haptic
 //
-//  * When zoomed beyond 1x, one-finger pan moves the viewport instead of the cursor.
+//  * Depends on `touchNavigation` (ViewportGestureRouting). Two-finger (default):
+//    one finger never moves the viewport; two fingers pan it when zoomed in and
+//    scroll the remote otherwise. Classic: one finger pans when zoomed in, two
+//    fingers always scroll the remote.
 //
 //  ──────────────────────────────────────────────────────────────────────
 //  TOOLBAR BUTTONS (left to right)
@@ -149,6 +152,8 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 	public var logger: VNCLogger?
 	public var settings: VNCConnection.Settings?
+	/// Read at the start of each drag, so changing it applies live.
+	public var touchNavigation: VNCTouchNavigation = .twoFinger
 	/// Perf HUD opt-in. Setter is a no-op outside DEBUG so the overlay can
 	/// never appear in shipped builds; the supporting code still compiles
 	/// (dead-code stripping handles the rest).
@@ -196,6 +201,8 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	private var desktopSwipeHadCompetingOutput = false
 	private var lastCompetingGestureOutputAt: TimeInterval?
 	private var twoFingerPanDidBegin = false
+	private var twoFingerDragAction: ViewportDragAction?
+	private var oneFingerDragAction: ViewportDragAction?
 
 	// MARK: - Modifier Key State
 	private var isShiftPressed = false
@@ -235,7 +242,6 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 	private var minScale: CGFloat = 0.5
 	private var maxScale: CGFloat = 5.0
 	private var panOffset: CGPoint = .zero
-	private var lastPanPoint: CGPoint = .zero
 	private var isDragging = false
 
 	// MARK: - Scale Ratio Cache
@@ -1072,13 +1078,13 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 		framebufferView.addGestureRecognizer(doubleTap)
 		tapGesture.require(toFail: doubleTap)
 
-		// Pan = mouse move
+		// Pan = mouse move, or pan the viewport (see touchNavigation)
 		let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
 		panGesture.minimumNumberOfTouches = 1
 		panGesture.maximumNumberOfTouches = 1
 		framebufferView.addGestureRecognizer(panGesture)
 
-		// Two-finger pan = scroll
+		// Two-finger pan = scroll, or pan the viewport (see touchNavigation)
 		let twoFingerPan = UIPanGestureRecognizer(target: self, action: #selector(handleTwoFingerPan(_:)))
 		twoFingerPan.minimumNumberOfTouches = 2
 		twoFingerPan.maximumNumberOfTouches = 2
@@ -1634,30 +1640,33 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 		switch gesture.state {
 		case .began:
-			lastPanPoint = touchPoint
+			oneFingerDragAction = ViewportGestureRouting.dragAction(
+				touchCount: 1, viewportScale: currentScale, navigation: touchNavigation)
+			gesture.setTranslation(.zero, in: framebufferView)
 			moveCursor(to: fbPoint)
 			framebufferViewControllerDelegate?.framebufferViewController(self, mouseDidMove: fbPoint)
 
 		case .changed:
-				if isDragging {
-					moveCursor(to: fbPoint)
-					framebufferViewControllerDelegate?.framebufferViewController(self, mouseDidMove: fbPoint)
-				} else if currentScale > 1.01 {
-					let delta = CGPoint(x: touchPoint.x - lastPanPoint.x, y: touchPoint.y - lastPanPoint.y)
-					panOffset.x += delta.x
-					panOffset.y += delta.y
-					lastPanPoint = touchPoint
-					clampPanOffset()
-					updateTransform()
-					updateCursorPosition() // Keep cursor in place when panning view
+				if oneFingerDragAction == .panViewport && !isDragging {
+					panViewport(by: gesture)
 				} else {
 					moveCursor(to: fbPoint)
 					framebufferViewControllerDelegate?.framebufferViewController(self, mouseDidMove: fbPoint)
 				}
 
 		default:
-			break
+			oneFingerDragAction = nil
 		}
+	}
+
+	private func panViewport(by gesture: UIPanGestureRecognizer) {
+		let translation = gesture.translation(in: framebufferView)
+		panOffset.x += translation.x
+		panOffset.y += translation.y
+		gesture.setTranslation(.zero, in: framebufferView)
+		clampPanOffset()
+		updateTransform()
+		updateCursorPosition() // Keep cursor on its remote point while the view moves
 	}
 
 	@objc private func handleTwoFingerPan(_ gesture: UIPanGestureRecognizer) {
@@ -1668,14 +1677,25 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 		switch gesture.state {
 			case .began:
-				twoFingerPanDidBegin = true
 				lastCompetingGestureOutputAt = CACurrentMediaTime()
-				beginPointerModifiersIfNeeded()
+				// Decided once per gesture so a pan never flips into a scroll mid-drag.
+				twoFingerDragAction = ViewportGestureRouting.dragAction(
+					touchCount: 2, viewportScale: currentScale, navigation: touchNavigation)
+				if twoFingerDragAction == .scrollRemote {
+					twoFingerPanDidBegin = true
+					beginPointerModifiersIfNeeded()
+				} else {
+					gesture.setTranslation(.zero, in: framebufferView)
+				}
 			case .changed:
 				guard !isDesktopSwipeInProgress else {
 					return
 				}
 				lastCompetingGestureOutputAt = CACurrentMediaTime()
+				if twoFingerDragAction == .panViewport {
+					panViewport(by: gesture)
+					return
+				}
 				// Calculate velocity-based multiplier for acceleration (faster scrolls = more steps)
 				let velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 				let accelerationMultiplier = max(1.0, min(5.0, velocityMagnitude / 500.0))
@@ -1693,6 +1713,7 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 					endPointerModifiersIfNeeded()
 					twoFingerPanDidBegin = false
 				}
+				twoFingerDragAction = nil
 			default:
 				break
 		}
