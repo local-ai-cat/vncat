@@ -79,6 +79,7 @@
 import Foundation
 import os.signpost
 import UIKit
+import UniformTypeIdentifiers
 
 import RoyalVNCKit
 
@@ -1227,26 +1228,45 @@ public class CAFramebufferViewController: UIViewController, FramebufferViewContr
 
 	@objc private func pasteFromClipboard() {
 		logger?.logDebug("[PASTE] button tapped, reading UIPasteboard…")
-		let text: String?
-		text = UIPasteboard.general.string
-		logger?.logDebug("[PASTE] pasteboard string: \(text?.count ?? -1) chars")
-
-		guard let text, !text.isEmpty else {
-			logger?.logDebug("[PASTE] empty/nil — bailing")
-			lightHaptic.impactOccurred()
-			return
-		}
+		let pasteboard = UIPasteboard.general
+		let plan = ClipboardPastePlan.choose(string: pasteboard.string, hasImage: pasteboard.hasImages)
 
 		guard let delegate = framebufferViewControllerDelegate else {
 			logger?.logError("[PASTE] no delegate set — cannot forward paste")
 			return
 		}
 
-		logger?.logDebug("[PASTE] forwarding to delegate")
-		delegate.framebufferViewControllerDidRequestPaste(self, text: text)
-		logger?.logDebug("[PASTE] delegate returned")
+		switch plan {
+		case .text(let text):
+			logger?.logDebug("[PASTE] forwarding \(text.count) chars to delegate")
+			delegate.framebufferViewControllerDidRequestPaste(self, text: text)
+		case .image:
+			guard let imageData = Self.clipboardImageData(pasteboard) else {
+				logger?.logDebug("[PASTE] image flagged but unreadable — bailing")
+				lightHaptic.impactOccurred()
+				return
+			}
+			logger?.logDebug("[PASTE] forwarding \(imageData.count)-byte image to delegate")
+			delegate.framebufferViewControllerDidRequestImagePaste(self, imageData: imageData)
+		case .nothing:
+			logger?.logDebug("[PASTE] empty/nil — bailing")
+			lightHaptic.impactOccurred()
+			return
+		}
 
 		mediumHaptic.impactOccurred()
+	}
+
+	/// The clipboard image as stored (PNG, JPEG, HEIC, TIFF) so nothing is
+	/// re-encoded twice; a `UIImage`-only item falls back to PNG.
+	private static func clipboardImageData(_ pasteboard: UIPasteboard) -> Data? {
+		let storedTypes = [UTType.png, .jpeg, .heic, .tiff].map(\.identifier)
+		for type in storedTypes {
+			if let data = pasteboard.data(forPasteboardType: type), !data.isEmpty {
+				return data
+			}
+		}
+		return pasteboard.image?.pngData()
 	}
 
 	@objc private func disconnect() {

@@ -34,6 +34,18 @@ public protocol FramebufferViewControllerDelegate: AnyObject {
 
 	func framebufferViewControllerDidRequestPaste(_ framebufferViewController: FramebufferViewController,
 												  text: String)
+
+	/// Paste with an image on the local clipboard. RFB has no image clipboard
+	/// the targeted servers accept, so the host moves `imageData` to the
+	/// remote pasteboard itself (any ImageIO-readable format) and then sends
+	/// the paste chord. The default ignores it.
+	func framebufferViewControllerDidRequestImagePaste(_ framebufferViewController: FramebufferViewController,
+													   imageData: Data)
+}
+
+public extension FramebufferViewControllerDelegate {
+	func framebufferViewControllerDidRequestImagePaste(_ framebufferViewController: FramebufferViewController,
+													   imageData: Data) {}
 }
 
 #endif
